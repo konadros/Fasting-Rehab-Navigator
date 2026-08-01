@@ -76,26 +76,26 @@ st.markdown("""
 # ---------------------------------------------------------
 # APPS SCRIPT WEB APP ENDPOINT SETUP
 # ---------------------------------------------------------
-# Ανάγνωση URL από Secrets ή απευθείας
-WEB_APP_URL = st.secrets.get("WEB_APP_URL", "")
+WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwyQv4yEFHahfM6HYWZ0N3W6M3nsTfp2K6WEEFE0J7UvDfs0ZOmrslSk41HUftIZbQz/exec"
 
 date_today = datetime.date.today().strftime("%Y-%m-%d")
 
 # Fetch Cloud Data on initial load
 initial_cals, initial_prot, initial_burned, initial_skipped = 0, 0, 0, 0
+initial_last_meal_time = None
 
 if WEB_APP_URL:
     try:
         res = requests.get(WEB_APP_URL, timeout=3)
         if res.status_code == 200:
             data = res.json()
-            # Find today's row
             for row in data[1:]: # Skip header
                 if len(row) > 0 and str(row[0]) == date_today:
                     initial_cals = int(row[1]) if row[1] else 0
                     initial_prot = int(row[2]) if row[2] else 0
                     initial_burned = int(row[3]) if row[3] else 0
                     initial_skipped = int(row[4]) if row[4] else 0
+                    initial_last_meal_time = str(row[5]) if len(row) > 5 and row[5] else None
     except Exception:
         pass
 
@@ -104,7 +104,7 @@ if 'protein_consumed' not in st.session_state: st.session_state.protein_consumed
 if 'workout_burned' not in st.session_state: st.session_state.workout_burned = initial_burned
 if 'skipped_count' not in st.session_state: st.session_state.skipped_count = initial_skipped
 if 'api_key' not in st.session_state: st.session_state.api_key = ""
-if 'last_meal_time' not in st.session_state: st.session_state.last_meal_time = None
+if 'last_meal_time' not in st.session_state: st.session_state.last_meal_time = initial_last_meal_time
 
 base_cal_target = 2350
 base_protein_target = 150
@@ -161,7 +161,7 @@ def get_smart_recommendation():
         try:
             genai.configure(api_key=st.session_state.api_key)
             model = genai.GenerativeModel('gemini-1.5-flash')
-            prompt = f"User Status: Time {current_time_str}, Skipped {st.session_state.skipped_count}, Workout {st.session_state.workout_burned} kcal. Remaining: {rem_cal} kcal, {rem_protein}g protein. Give 2 short Greek sentences for next fasting meal."
+            prompt = f"User Status: Time {current_time_str}, Actual Last Meal Time {st.session_state.last_meal_time or 'None'}, Skipped {st.session_state.skipped_count}, Workout {st.session_state.workout_burned} kcal. Remaining: {rem_cal} kcal, {rem_protein}g protein. Give 2 short Greek sentences for next fasting meal."
             return model.generate_content(prompt).text.strip()
         except Exception:
             pass
@@ -180,18 +180,21 @@ def get_smart_recommendation():
 st.markdown(f"""<div class="next-meal-card">{get_smart_recommendation()}</div>""", unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# FLEXIBLE MEAL LOGGING
+# FLEXIBLE MEAL LOGGING WITH EXACT MEAL TIME
 # ---------------------------------------------------------
-with st.expander("🍽️ Καταγραφή Γεύματος & Ώρας", expanded=True):
+with st.expander("🍽️ Καταγραφή Γεύματος & Πραγματικής Ώρας", expanded=True):
     col_t1, col_t2 = st.columns([1, 2])
-    with col_t1: meal_time = st.time_input("Ώρα Γεύματος", datetime.datetime.now().time())
-    with col_t2: meal_desc = st.text_input("Τι έφαγες;", placeholder="π.χ. 1 πιάτο φακές, 10 ελιές, 2 φρυγανιές")
+    with col_t1: 
+        meal_time = st.time_input("Πραγματική Ώρα Γεύματος", datetime.datetime.now().time())
+    with col_t2: 
+        meal_desc = st.text_input("Τι έφαγες;", placeholder="π.χ. 1 πιάτο φακές, 10 ελιές, 2 φρυγανιές")
     
     api_key_in = st.text_input("Gemini API Key (Προαιρετικό):", value=st.session_state.api_key, type="password")
     if api_key_in: st.session_state.api_key = api_key_in
 
     if st.button("✨ Καταγραφή Γεύματος"):
         if meal_desc:
+            # Αποθήκευση της ΠΡΑΓΜΑΤΙΚΗΣ ώρας γεύματος που επέλεξε ο χρήστης
             st.session_state.last_meal_time = meal_time.strftime("%H:%M")
             c_add, p_add = 0, 0
             if st.session_state.api_key:
@@ -237,10 +240,12 @@ st.subheader("⚡ Γρήγορες Ενέργειες (Thumb Zone)")
 col_a1, col_a2 = st.columns(2)
 
 with col_a1:
+    quick_meal_time = st.time_input("Ώρα Γρήγορου Γεύματος", datetime.datetime.now().time(), key="quick_time")
     if st.button("✅ Έφαγα το Προτεινόμενο"):
         st.session_state.cal_consumed += 450
         st.session_state.protein_consumed += 35
-        st.session_state.last_meal_time = datetime.datetime.now().strftime("%H:%M")
+        # Αποθήκευση της πραγματικής επιλεγμένης ώρας
+        st.session_state.last_meal_time = quick_meal_time.strftime("%H:%M")
         save_to_cloud()
         st.rerun()
 
@@ -265,5 +270,6 @@ if st.button("🔄 Μηδενισμός Ημέρας"):
     st.session_state.protein_consumed = 0
     st.session_state.workout_burned = 0
     st.session_state.skipped_count = 0
+    st.session_state.last_meal_time = None
     save_to_cloud()
     st.rerun()
