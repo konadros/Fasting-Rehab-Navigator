@@ -78,7 +78,7 @@ st.markdown("""
 # ---------------------------------------------------------
 # APPS SCRIPT WEB APP ENDPOINT SETUP
 # ---------------------------------------------------------
-WEB_APP_URL = "[https://script.google.com/macros/s/AKfycbwyQv4yEFHahfM6HYWZ0N3W6M3nsTfp2K6WEEFE0J7UvDfs0ZOmrslSk41HUftIZbQz/exec](https://script.google.com/macros/s/AKfycbwyQv4yEFHahfM6HYWZ0N3W6M3nsTfp2K6WEEFE0J7UvDfs0ZOmrslSk41HUftIZbQz/exec)"
+WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwyQv4yEFHahfM6HYWZ0N3W6M3nsTfp2K6WEEFE0J7UvDfs0ZOmrslSk41HUftIZbQz/exec"
 
 date_today = datetime.date.today().strftime("%Y-%m-%d")
 
@@ -90,14 +90,15 @@ def get_http_session():
     return session
 
 # ---------------------------------------------------------
-# HELPER: FETCH FROM CLOUD WITH TIMEOUT FIX & RETRY
+# HELPER: FETCH FROM CLOUD WITH 15s TIMEOUT & SILENT FAIL
 # ---------------------------------------------------------
 def fetch_cloud_data():
     cals, prot, burned, skipped, last_time = 0, 0, 0, 0, None
     if WEB_APP_URL:
         try:
             session = get_http_session()
-            res = session.get(WEB_APP_URL, timeout=10, allow_redirects=True)
+            # Αύξηση timeout στα 15 δευτερόλεπτα
+            res = session.get(WEB_APP_URL, timeout=15, allow_redirects=True)
             if res.status_code == 200:
                 data = res.json()
                 for row in data[1:]:  # Skip header
@@ -110,7 +111,7 @@ def fetch_cloud_data():
                             skipped = int(row[4]) if row[4] else 0
                             last_time = str(row[5]) if len(row) > 5 and row[5] else None
         except Exception:
-            st.toast("⚠️ Καθυστέρηση Google Cloud. Χρήση τοπικών δεδομένων...", icon="⏳")
+            pass # Σιωπηλό προσπέρασμα χωρίς ενοχλητικά μηνύματα
     return cals, prot, burned, skipped, last_time
 
 # Initial Load
@@ -146,7 +147,7 @@ def save_to_cloud():
                 "LastMealTime": str(st.session_state.last_meal_time or "")
             }
             session = get_http_session()
-            session.post(WEB_APP_URL, data=json.dumps(payload), headers={"Content-Type": "application/json"}, timeout=10, allow_redirects=True)
+            session.post(WEB_APP_URL, data=json.dumps(payload), headers={"Content-Type": "application/json"}, timeout=15, allow_redirects=True)
             st.toast("☁️ Επιτυχής συγχρονισμός στο Cloud!", icon="✅")
         except Exception as ex:
             st.error(f"❌ Σφάλμα αποθήκευσης: {ex}")
