@@ -132,7 +132,9 @@ with st.expander("🤖 Έξυπνη Καταγραφή Γεύματος με Gem
         else:
             try:
                 genai.configure(api_key=api_key)
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                
+                # Χρήση του νέου μοντέλου Gemini 2.5 Flash
+                model = genai.GenerativeModel('gemini-2.5-flash')
                 prompt = f"""Analyze this meal: "{user_meal_text}". 
                 Estimate total calories (kcal) and total protein (grams). 
                 Return ONLY a valid JSON object with format: {{"calories": int, "protein": int}}."""
@@ -149,7 +151,26 @@ with st.expander("🤖 Έξυπνη Καταγραφή Γεύματος με Gem
                 st.success(f"🤖 Gemini: Προστέθηκαν +{added_cals} kcal & +{added_prot}g Πρωτεΐνη!")
                 st.rerun()
             except Exception as e:
-                st.error(f"Σφάλμα κατά τον υπολογισμό: {e}")
+                # Fallback σε gemini-2.5-pro σε περίπτωση μη διαθεσιμότητας
+                try:
+                    model = genai.GenerativeModel('gemini-2.5-pro')
+                    prompt = f"""Analyze this meal: "{user_meal_text}". 
+                    Estimate total calories (kcal) and total protein (grams). 
+                    Return ONLY a valid JSON object with format: {{"calories": int, "protein": int}}."""
+                    
+                    response = model.generate_content(prompt)
+                    clean_json = response.text.strip().replace("```json", "").replace("```", "")
+                    data = json.loads(clean_json)
+                    
+                    added_cals = data.get("calories", 0)
+                    added_prot = data.get("protein", 0)
+                    
+                    st.session_state.cal_consumed += added_cals
+                    st.session_state.protein_consumed += added_prot
+                    st.success(f"🤖 Gemini: Προστέθηκαν +{added_cals} kcal & +{added_prot}g Πρωτεΐνη!")
+                    st.rerun()
+                except Exception as ex:
+                    st.error(f"Σφάλμα κατά τον υπολογισμό: {ex}")
 
 # Quick Action Buttons
 st.subheader("⚡ Γρήγορες Ενέργειες (Thumb Zone)")
