@@ -2,8 +2,7 @@ import streamlit as st
 import datetime
 import google.generativeai as genai
 import json
-import pandas as pd
-from streamlit_gsheets import GSheetsConnection
+import requests
 
 st.set_page_config(page_title="Fasting & Rehab Navigator v3", page_icon="🥗", layout="centered")
 
@@ -75,88 +74,64 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# GOOGLE SHEETS CONNECTION SETUP
+# APPS SCRIPT WEB APP ENDPOINT SETUP
 # ---------------------------------------------------------
-sheet_connected = False
-df_cloud = pd.DataFrame()
+# Ανάγνωση URL από Secrets ή απευθείας
+WEB_APP_URL = st.secrets.get("WEB_APP_URL", "")
 
-try:
-    conn = st.connection("gsheets", type=GSheetsConnection)
-    df_cloud = conn.read(ttl=0)
-    sheet_connected = True
-except Exception as e:
-    sheet_connected = False
-
-# Current Date
 date_today = datetime.date.today().strftime("%Y-%m-%d")
 
-# Load today's row if exists in Google Sheet
-today_row = None
-if sheet_connected and df_cloud is not None and not df_cloud.empty and 'Date' in df_cloud.columns:
-    # Καθαρισμός τύπων δεδομένων
-    df_cloud['Date'] = df_cloud['Date'].astype(str)
-    matched = df_cloud[df_cloud['Date'] == date_today]
-    if not matched.empty:
-        today_row = matched.iloc[-1]
+# Fetch Cloud Data on initial load
+initial_cals, initial_prot, initial_burned, initial_skipped = 0, 0, 0, 0
 
-# Base values initialized from Cloud if available
-initial_cal_consumed = int(today_row['CalConsumed']) if today_row is not None and 'CalConsumed' in today_row and pd.notnull(today_row['CalConsumed']) else 0
-initial_prot_consumed = int(today_row['ProtConsumed']) if today_row is not None and 'ProtConsumed' in today_row and pd.notnull(today_row['ProtConsumed']) else 0
-initial_burned = int(today_row['WorkoutBurned']) if today_row is not None and 'WorkoutBurned' in today_row and pd.notnull(today_row['WorkoutBurned']) else 0
-initial_skipped = int(today_row['SkippedCount']) if today_row is not None and 'SkippedCount' in today_row and pd.notnull(today_row['SkippedCount']) else 0
+if WEB_APP_URL:
+    try:
+        res = requests.get(WEB_APP_URL, timeout=3)
+        if res.status_code == 200:
+            data = res.json()
+            # Find today's row
+            for row in data[1:]: # Skip header
+                if len(row) > 0 and str(row[0]) == date_today:
+                    initial_cals = int(row[1]) if row[1] else 0
+                    initial_prot = int(row[2]) if row[2] else 0
+                    initial_burned = int(row[3]) if row[3] else 0
+                    initial_skipped = int(row[4]) if row[4] else 0
+    except Exception:
+        pass
 
-if 'cal_consumed' not in st.session_state:
-    st.session_state.cal_consumed = initial_cal_consumed
-if 'protein_consumed' not in st.session_state:
-    st.session_state.protein_consumed = initial_prot_consumed
-if 'workout_burned' not in st.session_state:
-    st.session_state.workout_burned = initial_burned
-if 'skipped_count' not in st.session_state:
-    st.session_state.skipped_count = initial_skipped
-if 'api_key' not in st.session_state:
-    st.session_state.api_key = ""
-if 'last_meal_time' not in st.session_state:
-    st.session_state.last_meal_time = None
+if 'cal_consumed' not in st.session_state: st.session_state.cal_consumed = initial_cals
+if 'protein_consumed' not in st.session_state: st.session_state.protein_consumed = initial_prot
+if 'workout_burned' not in st.session_state: st.session_state.workout_burned = initial_burned
+if 'skipped_count' not in st.session_state: st.session_state.skipped_count = initial_skipped
+if 'api_key' not in st.session_state: st.session_state.api_key = ""
+if 'last_meal_time' not in st.session_state: st.session_state.last_meal_time = None
 
-# Base Targets
 base_cal_target = 2350
 base_protein_target = 150
 
-# Header
 st.title("🥗 Fasting & Rehab GPS v3")
 st.caption(f"📅 Σήμερα: {date_today} | ☁️ Cloud Synced")
 
-if not sheet_connected:
-    st.error("⚠️ Δεν έχει συνδεθεί το Google Sheets! Ελέγξτε τα Secrets στο Streamlit Cloud.")
-
 # ---------------------------------------------------------
-# HELPER TO SAVE DATA TO GOOGLE SHEETS
+# HELPER TO SAVE DATA TO GOOGLE SHEETS VIA WEB APP
 # ---------------------------------------------------------
 def save_to_cloud():
-    if sheet_connected:
+    if WEB_APP_URL:
         try:
-            df_current = conn.read(ttl=0)
-            
-            new_row = pd.DataFrame([{
-                'Date': str(date_today),
-                'CalConsumed': int(st.session_state.cal_consumed),
-                'ProtConsumed': int(st.session_state.protein_consumed),
-                'WorkoutBurned': int(st.session_state.workout_burned),
-                'SkippedCount': int(st.session_state.skipped_count),
-                'LastMealTime': str(st.session_state.last_meal_time or "")
-            }])
-            
-            if df_current is None or df_current.empty or 'Date' not in df_current.columns:
-                updated_df = new_row
-            else:
-                df_current['Date'] = df_current['Date'].astype(str)
-                updated_df = df_current[df_current['Date'] != date_today]
-                updated_df = pd.concat([updated_df, new_row], ignore_index=True)
-                
-            conn.update(data=updated_df)
+            payload = {
+                "Date": date_today,
+                "CalConsumed": int(st.session_state.cal_consumed),
+                "ProtConsumed": int(st.session_state.protein_consumed),
+                "WorkoutBurned": int(st.session_state.workout_burned),
+                "SkippedCount": int(st.session_state.skipped_count),
+                "LastMealTime": str(st.session_state.last_meal_time or "")
+            }
+            requests.post(WEB_APP_URL, data=json.dumps(payload), headers={"Content-Type": "application/json"})
             st.toast("☁️ Τα δεδομένα αποθηκεύτηκαν στο Google Sheets!", icon="✅")
         except Exception as ex:
-            st.error(f"❌ Σφάλμα αποθήκευσης στο Google Sheets: {ex}")
+            st.error(f"❌ Σφάλμα αποθήκευσης: {ex}")
+    else:
+        st.warning("⚠️ Πρόσθεσε το WEB_APP_URL στα Secrets του Streamlit!")
 
 # ---------------------------------------------------------
 # DASHBOARD & MACROS
@@ -179,7 +154,6 @@ st.progress(min(1.0, st.session_state.protein_consumed / base_protein_target))
 # DYNAMIC RECOMMENDATION
 # ---------------------------------------------------------
 st.subheader("🎯 Προτεινόμενο Επόμενο Γεύμα")
-
 current_time_str = datetime.datetime.now().strftime("%H:%M")
 
 def get_smart_recommendation():
@@ -187,14 +161,8 @@ def get_smart_recommendation():
         try:
             genai.configure(api_key=st.session_state.api_key)
             model = genai.GenerativeModel('gemini-1.5-flash')
-            prompt = f"""
-            User Profile: 180cm, 87kg (Target <85kg), Orthodox August Fasting (Lentils, Tahini, Halva, Olives, Bread, Plant Protein).
-            Status: Time {current_time_str}, Last Meal {st.session_state.last_meal_time}, Skipped {st.session_state.skipped_count}, Workout Burned {st.session_state.workout_burned} kcal.
-            Remaining: {rem_cal} kcal, {rem_protein} g protein.
-            Give 2-3 short Greek sentences for next meal choice.
-            """
-            res = model.generate_content(prompt)
-            return res.text.strip()
+            prompt = f"User Status: Time {current_time_str}, Skipped {st.session_state.skipped_count}, Workout {st.session_state.workout_burned} kcal. Remaining: {rem_cal} kcal, {rem_protein}g protein. Give 2 short Greek sentences for next fasting meal."
+            return model.generate_content(prompt).text.strip()
         except Exception:
             pass
 
@@ -216,10 +184,8 @@ st.markdown(f"""<div class="next-meal-card">{get_smart_recommendation()}</div>""
 # ---------------------------------------------------------
 with st.expander("🍽️ Καταγραφή Γεύματος & Ώρας", expanded=True):
     col_t1, col_t2 = st.columns([1, 2])
-    with col_t1:
-        meal_time = st.time_input("Ώρα Γεύματος", datetime.datetime.now().time())
-    with col_t2:
-        meal_desc = st.text_input("Τι έφαγες;", placeholder="π.χ. 1 πιάτο φακές, 10 ελιές, 2 φρυγανιές")
+    with col_t1: meal_time = st.time_input("Ώρα Γεύματος", datetime.datetime.now().time())
+    with col_t2: meal_desc = st.text_input("Τι έφαγες;", placeholder="π.χ. 1 πιάτο φακές, 10 ελιές, 2 φρυγανιές")
     
     api_key_in = st.text_input("Gemini API Key (Προαιρετικό):", value=st.session_state.api_key, type="password")
     if api_key_in: st.session_state.api_key = api_key_in
