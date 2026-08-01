@@ -77,29 +77,33 @@ st.markdown("""
 # ---------------------------------------------------------
 # GOOGLE SHEETS CONNECTION SETUP
 # ---------------------------------------------------------
+sheet_connected = False
+df_cloud = pd.DataFrame()
+
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
     df_cloud = conn.read(ttl=0)
     sheet_connected = True
 except Exception as e:
     sheet_connected = False
-    df_cloud = pd.DataFrame()
 
 # Current Date
 date_today = datetime.date.today().strftime("%Y-%m-%d")
 
 # Load today's row if exists in Google Sheet
 today_row = None
-if sheet_connected and not df_cloud.empty and 'Date' in df_cloud.columns:
+if sheet_connected and df_cloud is not None and not df_cloud.empty and 'Date' in df_cloud.columns:
+    # Καθαρισμός τύπων δεδομένων
+    df_cloud['Date'] = df_cloud['Date'].astype(str)
     matched = df_cloud[df_cloud['Date'] == date_today]
     if not matched.empty:
         today_row = matched.iloc[-1]
 
 # Base values initialized from Cloud if available
-initial_cal_consumed = int(today_row['CalConsumed']) if today_row is not None and 'CalConsumed' in today_row else 0
-initial_prot_consumed = int(today_row['ProtConsumed']) if today_row is not None and 'ProtConsumed' in today_row else 0
-initial_burned = int(today_row['WorkoutBurned']) if today_row is not None and 'WorkoutBurned' in today_row else 0
-initial_skipped = int(today_row['SkippedCount']) if today_row is not None and 'SkippedCount' in today_row else 0
+initial_cal_consumed = int(today_row['CalConsumed']) if today_row is not None and 'CalConsumed' in today_row and pd.notnull(today_row['CalConsumed']) else 0
+initial_prot_consumed = int(today_row['ProtConsumed']) if today_row is not None and 'ProtConsumed' in today_row and pd.notnull(today_row['ProtConsumed']) else 0
+initial_burned = int(today_row['WorkoutBurned']) if today_row is not None and 'WorkoutBurned' in today_row and pd.notnull(today_row['WorkoutBurned']) else 0
+initial_skipped = int(today_row['SkippedCount']) if today_row is not None and 'SkippedCount' in today_row and pd.notnull(today_row['SkippedCount']) else 0
 
 if 'cal_consumed' not in st.session_state:
     st.session_state.cal_consumed = initial_cal_consumed
@@ -120,10 +124,10 @@ base_protein_target = 150
 
 # Header
 st.title("🥗 Fasting & Rehab GPS v3")
-st.caption(f"📅 Σήμερα: {date_today} | ☁️ Cloud Synced (Google Sheets)")
+st.caption(f"📅 Σήμερα: {date_today} | ☁️ Cloud Synced")
 
 if not sheet_connected:
-    st.warning("⚠️ Δεν έχει συνδεθεί ακόμα το Google Sheets Secrets. Η εφαρμογή τρέχει προσωρινά σε τοπικό mode.")
+    st.error("⚠️ Δεν έχει συνδεθεί το Google Sheets! Ελέγξτε τα Secrets στο Streamlit Cloud.")
 
 # ---------------------------------------------------------
 # HELPER TO SAVE DATA TO GOOGLE SHEETS
@@ -131,25 +135,28 @@ if not sheet_connected:
 def save_to_cloud():
     if sheet_connected:
         try:
-            new_data = pd.DataFrame([{
-                'Date': date_today,
-                'CalConsumed': st.session_state.cal_consumed,
-                'ProtConsumed': st.session_state.protein_consumed,
-                'WorkoutBurned': st.session_state.workout_burned,
-                'SkippedCount': st.session_state.skipped_count,
-                'LastMealTime': st.session_state.last_meal_time or ""
+            df_current = conn.read(ttl=0)
+            
+            new_row = pd.DataFrame([{
+                'Date': str(date_today),
+                'CalConsumed': int(st.session_state.cal_consumed),
+                'ProtConsumed': int(st.session_state.protein_consumed),
+                'WorkoutBurned': int(st.session_state.workout_burned),
+                'SkippedCount': int(st.session_state.skipped_count),
+                'LastMealTime': str(st.session_state.last_meal_time or "")
             }])
             
-            if df_cloud.empty:
-                updated_df = new_data
+            if df_current is None or df_current.empty or 'Date' not in df_current.columns:
+                updated_df = new_row
             else:
-                updated_df = df_cloud[df_cloud['Date'] != date_today]
-                updated_df = pd.concat([updated_df, new_data], ignore_index=True)
+                df_current['Date'] = df_current['Date'].astype(str)
+                updated_df = df_current[df_current['Date'] != date_today]
+                updated_df = pd.concat([updated_df, new_row], ignore_index=True)
                 
             conn.update(data=updated_df)
             st.toast("☁️ Τα δεδομένα αποθηκεύτηκαν στο Google Sheets!", icon="✅")
         except Exception as ex:
-            st.error(f"Σφάλμα αποθήκευσης στο Cloud: {ex}")
+            st.error(f"❌ Σφάλμα αποθήκευσης στο Google Sheets: {ex}")
 
 # ---------------------------------------------------------
 # DASHBOARD & MACROS
@@ -283,10 +290,14 @@ with col_a2:
         save_to_cloud()
         st.rerun()
 
-    if st.button("🔄 Μηδενισμός Ημέρας"):
-        st.session_state.cal_consumed = 0
-        st.session_state.protein_consumed = 0
-        st.session_state.workout_burned = 0
-        st.session_state.skipped_count = 0
+    if st.button("☁️ Χειροκίνητος Συγχρονισμός"):
         save_to_cloud()
-        st.rerun()
+
+st.divider()
+if st.button("🔄 Μηδενισμός Ημέρας"):
+    st.session_state.cal_consumed = 0
+    st.session_state.protein_consumed = 0
+    st.session_state.workout_burned = 0
+    st.session_state.skipped_count = 0
+    save_to_cloud()
+    st.rerun()
