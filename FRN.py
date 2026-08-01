@@ -3,6 +3,8 @@ import datetime
 import google.generativeai as genai
 import json
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 st.set_page_config(page_title="Fasting & Rehab Navigator v3", page_icon="🥗", layout="centered")
 
@@ -80,19 +82,28 @@ WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwyQv4yEFHahfM6HYWZ0N3W6M
 
 date_today = datetime.date.today().strftime("%Y-%m-%d")
 
+# Δημιουργία Session με αυτόματες ανακλήσεις (Retries)
+def get_http_session():
+    session = requests.Session()
+    retries = Retry(total=2, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+    session.mount("https://", HTTPAdapter(max_retries=retries))
+    return session
+
 # ---------------------------------------------------------
-# HELPER: FETCH FROM CLOUD WITH SMART DATE MATCHING
+# HELPER: FETCH FROM CLOUD WITH TIMEOUT FIX & RETRY
 # ---------------------------------------------------------
 def fetch_cloud_data():
     cals, prot, burned, skipped, last_time = 0, 0, 0, 0, None
     if WEB_APP_URL:
         try:
-            res = requests.get(WEB_APP_URL, timeout=4)
+            session = get_http_session()
+            # Αυξημένο timeout στα 10 δευτερόλεπτα
+            res = session.get(WEB_APP_URL, timeout=10, allow_redirects=True)
             if res.status_code == 200:
                 data = res.json()
                 for row in data[1:]:  # Skip header
                     if len(row) > 0 and row[0]:
-                        row_date_str = str(row[0])[:10]  # Παίρνει μόνο τους πρώτους 10 χαρακτήρες (YYYY-MM-DD)
+                        row_date_str = str(row[0])[:10]  # YYYY-MM-DD
                         if row_date_str == date_today:
                             cals = int(row[1]) if row[1] else 0
                             prot = int(row[2]) if row[2] else 0
@@ -100,7 +111,7 @@ def fetch_cloud_data():
                             skipped = int(row[4]) if row[4] else 0
                             last_time = str(row[5]) if len(row) > 5 and row[5] else None
         except Exception as ex:
-            st.error(f"Σφάλμα ανάγνωσης από Cloud: {ex}")
+            st.toast("⚠️ Καθυστέρηση Google Cloud. Χρήση τοπικών δεδομένων...", icon="⏳")
     return cals, prot, burned, skipped, last_time
 
 # Initial Load
@@ -135,7 +146,8 @@ def save_to_cloud():
                 "SkippedCount": int(st.session_state.skipped_count),
                 "LastMealTime": str(st.session_state.last_meal_time or "")
             }
-            requests.post(WEB_APP_URL, data=json.dumps(payload), headers={"Content-Type": "application/json"})
+            session = get_http_session()
+            session.post(WEB_APP_URL, data=json.dumps(payload), headers={"Content-Type": "application/json"}, timeout=10, allow_redirects=True)
             st.toast("☁️ Επιτυχής συγχρονισμός στο Cloud!", icon="✅")
         except Exception as ex:
             st.error(f"❌ Σφάλμα αποθήκευσης: {ex}")
@@ -209,79 +221,4 @@ with st.expander("🍽️ Καταγραφή Γεύματος & Πραγματι
                     model = genai.GenerativeModel('gemini-1.5-flash')
                     prompt = f"""Analyze meal: "{meal_desc}". Estimate calories (kcal) & protein (grams). Return ONLY JSON: {{"calories": int, "protein": int}}"""
                     res = model.generate_content(prompt)
-                    data = json.loads(res.text.strip().replace("```json", "").replace("```", ""))
-                    c_add, p_add = data.get("calories", 0), data.get("protein", 0)
-                except Exception:
-                    pass
-            
-            if c_add == 0:
-                t_low = meal_desc.lower()
-                if "φακε" in t_low: c_add += 300; p_add += 18
-                if "ελι" in t_low: c_add += 60; p_add += 1
-                if "ψωμ" in t_low or "φρυγανι" in t_low: c_add += 140; p_add += 5
-                if "ταχιν" in t_low: c_add += 180; p_add += 5
-                if "χαλβα" in t_low: c_add += 160; p_add += 4
-                if "πρωτε" in t_low or "scoop" in t_low: c_add += 120; p_add += 25
-                if c_add == 0: c_add, p_add = 350, 15
-
-            st.session_state.cal_consumed += c_add
-            st.session_state.protein_consumed += p_add
-            save_to_cloud()
-            st.rerun()
-
-# ---------------------------------------------------------
-# WORKOUT LOGGING
-# ---------------------------------------------------------
-with st.expander("🏃‍♂️ Καταγραφή Προπόνησης k3_rehab"):
-    w_cals = st.number_input("Θερμίδες Προπόνησης (kcal)", value=300, step=50)
-    if st.button("🔥 Προσθήκη Προπόνησης"):
-        st.session_state.workout_burned += w_cals
-        save_to_cloud()
-        st.rerun()
-
-# ---------------------------------------------------------
-# THUMB ACTION BUTTONS
-# ---------------------------------------------------------
-st.subheader("⚡ Γρήγορες Ενέργειες (Thumb Zone)")
-col_a1, col_a2 = st.columns(2)
-
-with col_a1:
-    quick_meal_time = st.time_input("Ώρα Γρήγορου Γεύματος", datetime.datetime.now().time(), key="quick_time")
-    if st.button("✅ Έφαγα το Προτεινόμενο"):
-        st.session_state.cal_consumed += 450
-        st.session_state.protein_consumed += 35
-        st.session_state.last_meal_time = quick_meal_time.strftime("%H:%M")
-        save_to_cloud()
-        st.rerun()
-
-    if st.button("🚫 Παράλειψη Γεύματος"):
-        st.session_state.skipped_count += 1
-        save_to_cloud()
-        st.rerun()
-
-with col_a2:
-    if st.button("🥤 + 1 Scoop Πρωτεΐνη"):
-        st.session_state.cal_consumed += 120
-        st.session_state.protein_consumed += 25
-        save_to_cloud()
-        st.rerun()
-
-    if st.button("🔄 Φόρτωση από Cloud"):
-        c_i, p_i, b_i, s_i, t_i = fetch_cloud_data()
-        st.session_state.cal_consumed = c_i
-        st.session_state.protein_consumed = p_i
-        st.session_state.workout_burned = b_i
-        st.session_state.skipped_count = s_i
-        st.session_state.last_meal_time = t_i
-        st.toast("🔄 Τα δεδομένα ανανεώθηκαν από το Cloud!", icon="☁️")
-        st.rerun()
-
-st.divider()
-if st.button("🔄 Μηδενισμός Ημέρας"):
-    st.session_state.cal_consumed = 0
-    st.session_state.protein_consumed = 0
-    st.session_state.workout_burned = 0
-    st.session_state.skipped_count = 0
-    st.session_state.last_meal_time = None
-    save_to_cloud()
-    st.rerun()
+                    data = json.loads(res.text.strip().replace("```json", "").replace("
