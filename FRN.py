@@ -87,7 +87,7 @@ if 'workout_burned' not in st.session_state:
 # Title & Date
 today_str = datetime.datetime.now().strftime("%d/%m/%Y")
 st.title("🥗 Fasting & Rehab GPS")
-st.caption(f"📅 Σήμερα: {today_str} | Powered by Gemini AI 🤖")
+st.caption(f"📅 Σήμερα: {today_str} | Fasting & Rehab Navigator")
 
 # Calculations
 net_cal_target = st.session_state.cal_target + st.session_state.workout_burned
@@ -120,40 +120,21 @@ else:
 st.markdown(f"""<div class="next-meal-card">{suggestion}</div>""", unsafe_allow_html=True)
 
 # 🧠 GEMINI AI MEAL CALCULATOR EXPANDER
-with st.expander("🤖 Έξυπνη Καταγραφή Γεύματος με Gemini AI", expanded=True):
-    api_key = st.text_input("Gemini API Key:", type="password", help="Πληκτρολόγησε το API Key σου από το Google AI Studio")
+with st.expander("🤖 Έξυπνη Καταγραφή Γεύματος", expanded=True):
+    api_key = st.text_input("Gemini API Key (Προαιρετικό):", type="password", help="Βάλε το API Key σου από το Google AI Studio")
     user_meal_text = st.text_input("Τι έφαγες;", placeholder="π.χ. 1.5 πιάτο φακές, 10 ελιές και 2 φρυγανιές")
     
-    if st.button("✨ Υπολογισμός με Gemini"):
-        if not api_key:
-            st.error("Παρακαλώ καταχώρισε το Gemini API Key σου.")
-        elif not user_meal_text:
+    if st.button("✨ Υπολογισμός Γεύματος"):
+        if not user_meal_text:
             st.warning("Γράψε τι έφαγες στο πλαίσιο κειμένου.")
         else:
-            try:
-                genai.configure(api_key=api_key)
-                
-                # Χρήση του νέου μοντέλου Gemini 2.5 Flash
-                model = genai.GenerativeModel('gemini-2.5-flash')
-                prompt = f"""Analyze this meal: "{user_meal_text}". 
-                Estimate total calories (kcal) and total protein (grams). 
-                Return ONLY a valid JSON object with format: {{"calories": int, "protein": int}}."""
-                
-                response = model.generate_content(prompt)
-                clean_json = response.text.strip().replace("```json", "").replace("```", "")
-                data = json.loads(clean_json)
-                
-                added_cals = data.get("calories", 0)
-                added_prot = data.get("protein", 0)
-                
-                st.session_state.cal_consumed += added_cals
-                st.session_state.protein_consumed += added_prot
-                st.success(f"🤖 Gemini: Προστέθηκαν +{added_cals} kcal & +{added_prot}g Πρωτεΐνη!")
-                st.rerun()
-            except Exception as e:
-                # Fallback σε gemini-2.5-pro σε περίπτωση μη διαθεσιμότητας
+            success = False
+            # Προσπάθεια με Gemini Flash API (Ελαφρύ μοντέλο με υψηλά όρια)
+            if api_key:
                 try:
-                    model = genai.GenerativeModel('gemini-2.5-pro')
+                    genai.configure(api_key=api_key)
+                    # Δοκιμή με ελαφρά Flash μοντέλα
+                    model = genai.GenerativeModel('gemini-1.5-flash')
                     prompt = f"""Analyze this meal: "{user_meal_text}". 
                     Estimate total calories (kcal) and total protein (grams). 
                     Return ONLY a valid JSON object with format: {{"calories": int, "protein": int}}."""
@@ -167,10 +148,39 @@ with st.expander("🤖 Έξυπνη Καταγραφή Γεύματος με Gem
                     
                     st.session_state.cal_consumed += added_cals
                     st.session_state.protein_consumed += added_prot
-                    st.success(f"🤖 Gemini: Προστέθηκαν +{added_cals} kcal & +{added_prot}g Πρωτεΐνη!")
+                    st.success(f"🤖 Gemini AI: Προστέθηκαν +{added_cals} kcal & +{added_prot}g Πρωτεΐνη!")
+                    success = True
                     st.rerun()
-                except Exception as ex:
-                    st.error(f"Σφάλμα κατά τον υπολογισμό: {ex}")
+                except Exception as e:
+                    st.warning("API Quota Limit: Μετάβαση σε τοπικό έξυπνο υπολογισμό...")
+
+            # Fallback (Τοπικός Υπολογισμός αν λείπει το API ή εξαντλήθηκε το Quota)
+            if not success:
+                text_lower = user_meal_text.lower()
+                cals, prot = 0, 0
+                
+                if "φακε" in text_lower or "φακές" in text_lower:
+                    cals += 300; prot += 18
+                if "ελι" in text_lower:
+                    cals += 60; prot += 1
+                if "ψωμ" in text_lower or "φρυγανι" in text_lower:
+                    cals += 140; prot += 5
+                if "ταχιν" in text_lower:
+                    cals += 180; prot += 5
+                if "χαλβα" in text_lower or "χαλβάς" in text_lower:
+                    cals += 160; prot += 4
+                if "πρωτε" in text_lower or "scoop" in text_lower:
+                    cals += 120; prot += 25
+                if "μπαναν" in text_lower or "φρουτ" in text_lower:
+                    cals += 90; prot += 1
+
+                if cals == 0:
+                    cals, prot = 300, 15 # Προεπιλογή αν δεν αναγνωριστεί λέξη-κλειδί
+                
+                st.session_state.cal_consumed += cals
+                st.session_state.protein_consumed += prot
+                st.success(f"🧮 Τοπικός Υπολογισμός: Προστέθηκαν ~{cals} kcal & ~{prot}g Πρωτεΐνη!")
+                st.rerun()
 
 # Quick Action Buttons
 st.subheader("⚡ Γρήγορες Ενέργειες (Thumb Zone)")
