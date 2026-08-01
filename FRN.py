@@ -80,31 +80,40 @@ WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwyQv4yEFHahfM6HYWZ0N3W6M
 
 date_today = datetime.date.today().strftime("%Y-%m-%d")
 
-# Fetch Cloud Data on initial load
-initial_cals, initial_prot, initial_burned, initial_skipped = 0, 0, 0, 0
-initial_last_meal_time = None
+# ---------------------------------------------------------
+# HELPER: FETCH FROM CLOUD WITH SMART DATE MATCHING
+# ---------------------------------------------------------
+def fetch_cloud_data():
+    cals, prot, burned, skipped, last_time = 0, 0, 0, 0, None
+    if WEB_APP_URL:
+        try:
+            res = requests.get(WEB_APP_URL, timeout=4)
+            if res.status_code == 200:
+                data = res.json()
+                for row in data[1:]:  # Skip header
+                    if len(row) > 0 and row[0]:
+                        row_date_str = str(row[0])[:10]  # Παίρνει μόνο τους πρώτους 10 χαρακτήρες (YYYY-MM-DD)
+                        if row_date_str == date_today:
+                            cals = int(row[1]) if row[1] else 0
+                            prot = int(row[2]) if row[2] else 0
+                            burned = int(row[3]) if row[3] else 0
+                            skipped = int(row[4]) if row[4] else 0
+                            last_time = str(row[5]) if len(row) > 5 and row[5] else None
+        except Exception as ex:
+            st.error(f"Σφάλμα ανάγνωσης από Cloud: {ex}")
+    return cals, prot, burned, skipped, last_time
 
-if WEB_APP_URL:
-    try:
-        res = requests.get(WEB_APP_URL, timeout=3)
-        if res.status_code == 200:
-            data = res.json()
-            for row in data[1:]: # Skip header
-                if len(row) > 0 and str(row[0]) == date_today:
-                    initial_cals = int(row[1]) if row[1] else 0
-                    initial_prot = int(row[2]) if row[2] else 0
-                    initial_burned = int(row[3]) if row[3] else 0
-                    initial_skipped = int(row[4]) if row[4] else 0
-                    initial_last_meal_time = str(row[5]) if len(row) > 5 and row[5] else None
-    except Exception:
-        pass
+# Initial Load
+if 'loaded_from_cloud' not in st.session_state:
+    c_init, p_init, b_init, s_init, t_init = fetch_cloud_data()
+    st.session_state.cal_consumed = c_init
+    st.session_state.protein_consumed = p_init
+    st.session_state.workout_burned = b_init
+    st.session_state.skipped_count = s_init
+    st.session_state.last_meal_time = t_init
+    st.session_state.loaded_from_cloud = True
 
-if 'cal_consumed' not in st.session_state: st.session_state.cal_consumed = initial_cals
-if 'protein_consumed' not in st.session_state: st.session_state.protein_consumed = initial_prot
-if 'workout_burned' not in st.session_state: st.session_state.workout_burned = initial_burned
-if 'skipped_count' not in st.session_state: st.session_state.skipped_count = initial_skipped
 if 'api_key' not in st.session_state: st.session_state.api_key = ""
-if 'last_meal_time' not in st.session_state: st.session_state.last_meal_time = initial_last_meal_time
 
 base_cal_target = 2350
 base_protein_target = 150
@@ -127,11 +136,9 @@ def save_to_cloud():
                 "LastMealTime": str(st.session_state.last_meal_time or "")
             }
             requests.post(WEB_APP_URL, data=json.dumps(payload), headers={"Content-Type": "application/json"})
-            st.toast("☁️ Τα δεδομένα αποθηκεύτηκαν στο Google Sheets!", icon="✅")
+            st.toast("☁️ Επιτυχής συγχρονισμός στο Cloud!", icon="✅")
         except Exception as ex:
             st.error(f"❌ Σφάλμα αποθήκευσης: {ex}")
-    else:
-        st.warning("⚠️ Πρόσθεσε το WEB_APP_URL στα Secrets του Streamlit!")
 
 # ---------------------------------------------------------
 # DASHBOARD & MACROS
@@ -180,7 +187,7 @@ def get_smart_recommendation():
 st.markdown(f"""<div class="next-meal-card">{get_smart_recommendation()}</div>""", unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# FLEXIBLE MEAL LOGGING WITH EXACT MEAL TIME
+# FLEXIBLE MEAL LOGGING
 # ---------------------------------------------------------
 with st.expander("🍽️ Καταγραφή Γεύματος & Πραγματικής Ώρας", expanded=True):
     col_t1, col_t2 = st.columns([1, 2])
@@ -194,7 +201,6 @@ with st.expander("🍽️ Καταγραφή Γεύματος & Πραγματι
 
     if st.button("✨ Καταγραφή Γεύματος"):
         if meal_desc:
-            # Αποθήκευση της ΠΡΑΓΜΑΤΙΚΗΣ ώρας γεύματος που επέλεξε ο χρήστης
             st.session_state.last_meal_time = meal_time.strftime("%H:%M")
             c_add, p_add = 0, 0
             if st.session_state.api_key:
@@ -244,7 +250,6 @@ with col_a1:
     if st.button("✅ Έφαγα το Προτεινόμενο"):
         st.session_state.cal_consumed += 450
         st.session_state.protein_consumed += 35
-        # Αποθήκευση της πραγματικής επιλεγμένης ώρας
         st.session_state.last_meal_time = quick_meal_time.strftime("%H:%M")
         save_to_cloud()
         st.rerun()
@@ -261,8 +266,15 @@ with col_a2:
         save_to_cloud()
         st.rerun()
 
-    if st.button("☁️ Χειροκίνητος Συγχρονισμός"):
-        save_to_cloud()
+    if st.button("🔄 Φόρτωση από Cloud"):
+        c_i, p_i, b_i, s_i, t_i = fetch_cloud_data()
+        st.session_state.cal_consumed = c_i
+        st.session_state.protein_consumed = p_i
+        st.session_state.workout_burned = b_i
+        st.session_state.skipped_count = s_i
+        st.session_state.last_meal_time = t_i
+        st.toast("🔄 Τα δεδομένα ανανεώθηκαν από το Cloud!", icon="☁️")
+        st.rerun()
 
 st.divider()
 if st.button("🔄 Μηδενισμός Ημέρας"):
