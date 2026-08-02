@@ -93,8 +93,17 @@ def get_http_session():
     session.mount("https://", HTTPAdapter(max_retries=retries))
     return session
 
+# Safe integer parser
+def safe_int(val):
+    try:
+        if val is None: return 0
+        s = str(val).strip().replace("'", "")
+        return int(float(s)) if s else 0
+    except Exception:
+        return 0
+
 # ---------------------------------------------------------
-# HELPER: FETCH FROM CLOUD
+# HELPER: FETCH FROM CLOUD WITH ROBUST PARSING
 # ---------------------------------------------------------
 def fetch_cloud_data():
     cals, prot, burned, skipped, last_time = 0, 0, 0, 0, None
@@ -104,32 +113,34 @@ def fetch_cloud_data():
             res = session.get(WEB_APP_URL, timeout=12, allow_redirects=True)
             if res.status_code == 200:
                 data = res.json()
-                for row in data[1:]:
+                for row in data[1:]:  # Skip header
                     if len(row) > 0 and row[0]:
-                        row_date_str = str(row[0])[:10]
+                        row_date_str = str(row[0]).strip()[:10]
                         if row_date_str == date_today:
-                            cals = int(row[1]) if row[1] else 0
-                            prot = int(row[2]) if row[2] else 0
-                            burned = int(row[3]) if row[3] else 0
-                            skipped = int(row[4]) if row[4] else 0
-                            last_time = str(row[5]).strip() if len(row) > 5 and row[5] else None
+                            cals = safe_int(row[1]) if len(row) > 1 else 0
+                            prot = safe_int(row[2]) if len(row) > 2 else 0
+                            burned = safe_int(row[3]) if len(row) > 3 else 0
+                            skipped = safe_int(row[4]) if len(row) > 4 else 0
+                            
+                            if len(row) > 5 and row[5]:
+                                t_str = str(row[5]).replace("'", "").strip()
+                                last_time = t_str if t_str else None
         except Exception:
             pass
     return cals, prot, burned, skipped, last_time
 
-# Initial Load
+# Initial Load for new sessions / devices
 if 'loaded_from_cloud' not in st.session_state:
-    c_init, p_init, b_init, s_init, t_init = fetch_cloud_data()
-    st.session_state.cal_consumed = c_init
-    st.session_state.protein_consumed = p_init
-    st.session_state.workout_burned = b_init
-    st.session_state.skipped_count = s_init
-    st.session_state.last_meal_time = t_init
+    c_i, p_i, b_i, s_i, t_i = fetch_cloud_data()
+    st.session_state.cal_consumed = c_i
+    st.session_state.protein_consumed = p_i
+    st.session_state.workout_burned = b_i
+    st.session_state.skipped_count = s_i
+    st.session_state.last_meal_time = t_i
     st.session_state.loaded_from_cloud = True
 
 if 'api_key' not in st.session_state: st.session_state.api_key = ""
 
-# 🔒 ΑΡΧΙΚΟΠΟΙΗΣΗ ΩΡΑΣ ΣΤΟ SESSION STATE ΓΙΑ ΝΑ ΜΗΝ ΕΠΑΝΑΦΕΡΕΤΑΙ
 if 'meal_time_picker' not in st.session_state:
     st.session_state.meal_time_picker = now_greek.time()
 if 'quick_time_picker' not in st.session_state:
@@ -207,12 +218,11 @@ def get_smart_recommendation():
 st.markdown(f"""<div class="next-meal-card">{get_smart_recommendation()}</div>""", unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# FLEXIBLE MEAL LOGGING (FIXED TIME INPUT)
+# FLEXIBLE MEAL LOGGING
 # ---------------------------------------------------------
 with st.expander("🍽️ Καταγραφή Γεύματος & Πραγματικής Ώρας", expanded=True):
     col_t1, col_t2 = st.columns([1, 2])
     with col_t1: 
-        # Χρήση του session state key ώστε να μην επανέρχεται η ώρα
         meal_time = st.time_input("Πραγματική Ώρα Γεύματος", key="meal_time_picker", step=300)
     with col_t2: 
         meal_desc = st.text_input("Τι έφαγες;", placeholder="π.χ. 1 πιάτο φακές, 10 ελιές, 2 φρυγανιές")
@@ -222,9 +232,7 @@ with st.expander("🍽️ Καταγραφή Γεύματος & Πραγματι
 
     if st.button("✨ Καταγραφή Γεύματος"):
         if meal_desc:
-            # Αποθήκευση της ώρας που έχει επιλεγεί εκείνη τη στιγμή
             st.session_state.last_meal_time = meal_time.strftime("%H:%M")
-            
             c_add, p_add = 0, 0
             if st.session_state.api_key:
                 try:
