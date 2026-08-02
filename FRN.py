@@ -52,6 +52,7 @@ now_greek = get_greek_now()
 date_today = now_greek.strftime("%Y-%m-%d")
 current_time_str = now_greek.strftime("%H:%M")
 
+# Headers για UPSERT (Insert or Update on Primary Key conflict)
 headers = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -60,7 +61,7 @@ headers = {
 }
 
 # ---------------------------------------------------------
-# SUPABASE HELPERS (FETCH & SAVE IN MILLISECONDS)
+# SUPABASE HELPERS (FETCH & UPSERT)
 # ---------------------------------------------------------
 def fetch_cloud_data():
     cals, prot, burned, skipped, last_time = 0, 0, 0, 0, None
@@ -85,33 +86,34 @@ def save_to_cloud():
     if SUPABASE_URL and SUPABASE_KEY:
         try:
             endpoint = f"{SUPABASE_URL}/rest/v1/daily_logs"
-            payload = {
+            payload = [{
                 "date": date_today,
                 "cal_consumed": int(st.session_state.cal_consumed),
                 "prot_consumed": int(st.session_state.protein_consumed),
                 "workout_burned": int(st.session_state.workout_burned),
                 "skipped_count": int(st.session_state.skipped_count),
                 "last_meal_time": str(st.session_state.last_meal_time or "")
-            }
+            }]
+            
+            # Στέλνουμε POST με payload ως array & resolution=merge-duplicates για ακαριαίο UPSERT
             res = requests.post(endpoint, headers=headers, data=json.dumps(payload), timeout=5)
-            if res.status_code in [200, 201]:
-                st.toast("⚡ Αποθηκεύτηκε στο Supabase!", icon="✅")
+
+            if res.status_code in [200, 201, 204]:
+                st.toast("⚡ Αποθηκεύτηκε επιτυχώς στο Supabase!", icon="✅")
             else:
                 st.error(f"❌ Σφάλμα Supabase HTTP {res.status_code}: {res.text}")
         except Exception as ex:
             st.error(f"❌ Σφάλμα αποθήκευσης: {ex}")
 
-# 🔄 ΑΜΕΣΗ ΦΟΡΤΩΣΗ ΑΠΟ ΤΗ ΒΑΣΗ ΣΕ ΚΑΘΕ ΝΕΟ SCRIPT RUN
-c_i, p_i, b_i, s_i, t_i = fetch_cloud_data()
-
-# Ενημέρωση των session states αν δεν έχουν τροποποιηθεί τοπικά
-if 'cal_consumed' not in st.session_state or st.session_state.get('auto_sync', True):
+# 🔄 ΑΡΧΙΚΗ ΦΟΡΤΩΣΗ ΔΕΔΟΜΕΝΩΝ
+if 'loaded' not in st.session_state:
+    c_i, p_i, b_i, s_i, t_i = fetch_cloud_data()
     st.session_state.cal_consumed = c_i
     st.session_state.protein_consumed = p_i
     st.session_state.workout_burned = b_i
     st.session_state.skipped_count = s_i
     st.session_state.last_meal_time = t_i
-    st.session_state.auto_sync = False
+    st.session_state.loaded = True
 
 if 'api_key' not in st.session_state: st.session_state.api_key = ""
 if 'meal_time_picker' not in st.session_state: st.session_state.meal_time_picker = now_greek.time()
@@ -250,7 +252,12 @@ with col_a2:
         st.rerun()
 
     if st.button("🔄 Φόρτωση από Cloud"):
-        st.session_state.auto_sync = True
+        c_i, p_i, b_i, s_i, t_i = fetch_cloud_data()
+        st.session_state.cal_consumed = c_i
+        st.session_state.protein_consumed = p_i
+        st.session_state.workout_burned = b_i
+        st.session_state.skipped_count = s_i
+        st.session_state.last_meal_time = t_i
         st.toast("⚡ Ανανεώθηκαν τα δεδομένα από το Supabase!", icon="☁️")
         st.rerun()
 
