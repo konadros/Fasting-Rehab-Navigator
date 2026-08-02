@@ -52,7 +52,6 @@ now_greek = get_greek_now()
 date_today = now_greek.strftime("%Y-%m-%d")
 current_time_str = now_greek.strftime("%H:%M")
 
-# Header με ενεργοποιημένο το UPSERT (merge-duplicates) για αποφυγή του 409 Conflict
 headers = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -94,24 +93,25 @@ def save_to_cloud():
                 "skipped_count": int(st.session_state.skipped_count),
                 "last_meal_time": str(st.session_state.last_meal_time or "")
             }
-            # Χρήση POST με merge-duplicates header για αυτόματο Update
             res = requests.post(endpoint, headers=headers, data=json.dumps(payload), timeout=5)
             if res.status_code in [200, 201]:
-                st.toast("⚡ Ακαριαία Αποθήκευση στο Supabase!", icon="✅")
+                st.toast("⚡ Αποθηκεύτηκε στο Supabase!", icon="✅")
             else:
                 st.error(f"❌ Σφάλμα Supabase HTTP {res.status_code}: {res.text}")
         except Exception as ex:
             st.error(f"❌ Σφάλμα αποθήκευσης: {ex}")
 
-# Initial Load
-if 'loaded_from_cloud' not in st.session_state:
-    c_i, p_i, b_i, s_i, t_i = fetch_cloud_data()
+# 🔄 ΑΜΕΣΗ ΦΟΡΤΩΣΗ ΑΠΟ ΤΗ ΒΑΣΗ ΣΕ ΚΑΘΕ ΝΕΟ SCRIPT RUN
+c_i, p_i, b_i, s_i, t_i = fetch_cloud_data()
+
+# Ενημέρωση των session states αν δεν έχουν τροποποιηθεί τοπικά
+if 'cal_consumed' not in st.session_state or st.session_state.get('auto_sync', True):
     st.session_state.cal_consumed = c_i
     st.session_state.protein_consumed = p_i
     st.session_state.workout_burned = b_i
     st.session_state.skipped_count = s_i
     st.session_state.last_meal_time = t_i
-    st.session_state.loaded_from_cloud = True
+    st.session_state.auto_sync = False
 
 if 'api_key' not in st.session_state: st.session_state.api_key = ""
 if 'meal_time_picker' not in st.session_state: st.session_state.meal_time_picker = now_greek.time()
@@ -250,12 +250,7 @@ with col_a2:
         st.rerun()
 
     if st.button("🔄 Φόρτωση από Cloud"):
-        c_i, p_i, b_i, s_i, t_i = fetch_cloud_data()
-        st.session_state.cal_consumed = c_i
-        st.session_state.protein_consumed = p_i
-        st.session_state.workout_burned = b_i
-        st.session_state.skipped_count = s_i
-        st.session_state.last_meal_time = t_i
+        st.session_state.auto_sync = True
         st.toast("⚡ Ανανεώθηκαν τα δεδομένα από το Supabase!", icon="☁️")
         st.rerun()
 
