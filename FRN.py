@@ -52,16 +52,15 @@ now_greek = get_greek_now()
 date_today = now_greek.strftime("%Y-%m-%d")
 current_time_str = now_greek.strftime("%H:%M")
 
-# Headers για UPSERT (Insert or Update on Primary Key conflict)
 headers = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
     "Content-Type": "application/json",
-    "Prefer": "resolution=merge-duplicates"
+    "Prefer": "return=representation"
 }
 
 # ---------------------------------------------------------
-# SUPABASE HELPERS (FETCH & UPSERT)
+# SUPABASE HELPERS (FETCH & SAFE SAVE)
 # ---------------------------------------------------------
 def fetch_cloud_data():
     cals, prot, burned, skipped, last_time = 0, 0, 0, 0, None
@@ -85,27 +84,35 @@ def fetch_cloud_data():
 def save_to_cloud():
     if SUPABASE_URL and SUPABASE_KEY:
         try:
-            endpoint = f"{SUPABASE_URL}/rest/v1/daily_logs"
-            payload = [{
+            payload = {
                 "date": date_today,
                 "cal_consumed": int(st.session_state.cal_consumed),
                 "prot_consumed": int(st.session_state.protein_consumed),
                 "workout_burned": int(st.session_state.workout_burned),
                 "skipped_count": int(st.session_state.skipped_count),
                 "last_meal_time": str(st.session_state.last_meal_time or "")
-            }]
+            }
             
-            # Στέλνουμε POST με payload ως array & resolution=merge-duplicates για ακαριαίο UPSERT
-            res = requests.post(endpoint, headers=headers, data=json.dumps(payload), timeout=5)
+            check_url = f"{SUPABASE_URL}/rest/v1/daily_logs?date=eq.{date_today}&select=date"
+            check_res = requests.get(check_url, headers=headers, timeout=5)
+            
+            if check_res.status_code == 200 and len(check_res.json()) > 0:
+                target_url = f"{SUPABASE_URL}/rest/v1/daily_logs?date=eq.{date_today}"
+                res = requests.patch(target_url, headers=headers, data=json.dumps(payload), timeout=5)
+            else:
+                target_url = f"{SUPABASE_URL}/rest/v1/daily_logs"
+                res = requests.post(target_url, headers=headers, data=json.dumps(payload), timeout=5)
 
             if res.status_code in [200, 201, 204]:
-                st.toast("⚡ Αποθηκεύτηκε επιτυχώς στο Supabase!", icon="✅")
+                st.toast("⚡ Αποθηκεύτηκε στο Supabase!", icon="✅")
             else:
-                st.error(f"❌ Σφάλμα Supabase HTTP {res.status_code}: {res.text}")
+                st.error(f"❌ Σφάλμα αποθήκευσης: {res.status_code}")
         except Exception as ex:
-            st.error(f"❌ Σφάλμα αποθήκευσης: {ex}")
+            st.error(f"❌ Σφάλμα δικτύου: {ex}")
 
-# 🔄 ΑΡΧΙΚΗ ΦΟΡΤΩΣΗ ΔΕΔΟΜΕΝΩΝ
+# ---------------------------------------------------------
+# INITIAL LOAD & SESSION STATE LOCKS
+# ---------------------------------------------------------
 if 'loaded' not in st.session_state:
     c_i, p_i, b_i, s_i, t_i = fetch_cloud_data()
     st.session_state.cal_consumed = c_i
@@ -118,12 +125,13 @@ if 'loaded' not in st.session_state:
 if 'api_key' not in st.session_state: st.session_state.api_key = ""
 if 'meal_time_picker' not in st.session_state: st.session_state.meal_time_picker = now_greek.time()
 if 'quick_time_picker' not in st.session_state: st.session_state.quick_time_picker = now_greek.time()
+if 'workout_time_picker' not in st.session_state: st.session_state.workout_time_picker = now_greek.time()
 
 base_cal_target = 2350
 base_protein_target = 150
 
 st.title("🥗 Fasting & Rehab GPS v3")
-st.caption(f"📅 {date_today} | 🕒 Ώρα: {current_time_str} | ⚡ Supabase Powered")
+st.caption(f"📅 {date_today} | 🕒 Ώρα: {current_time_str} | ⚡ Supabase Synced")
 
 # ---------------------------------------------------------
 # DASHBOARD & MACROS
@@ -215,13 +223,49 @@ with st.expander("🍽️ Καταγραφή Γεύματος & Πραγματι
             st.rerun()
 
 # ---------------------------------------------------------
-# WORKOUT LOGGING
+# COMPLETE WORKOUT LOGGING (k3_rehab Protocol & Time)
 # ---------------------------------------------------------
-with st.expander("🏃‍♂️ Καταγραφή Προπόνησης k3_rehab"):
-    w_cals = st.number_input("Θερμίδες Προπόνησης (kcal)", value=300, step=50)
-    if st.button("🔥 Προσθήκη Προπόνησης"):
-        st.session_state.workout_burned += w_cals
+with st.expander("🏃‍♂️ Καταγραφή Προπόνησης k3_rehab Protocol", expanded=False):
+    col_w1, col_w2 = st.columns([1, 2])
+    with col_w1:
+        w_time = st.time_input("Ώρα Προπόνησης", key="workout_time_picker", step=300)
+    with col_w2:
+        k3_type = st.selectbox(
+            "Τύπος Προπόνησης k3_rehab",
+            [
+                "Walk-to-Run / Running Intervals",
+                "Tabata Protocol T1/T2",
+                "SP Drainage (Elevated Wall Pumps)",
+                "Ελεύθερη Ενδυνάμωση / Rehab",
+                "Άλλο (Περιγραφή)"
+            ]
+        )
+
+    w_desc = st.text_input("Περιγραφή / Λεπτομέρειες Προπόνησης", placeholder="π.χ. 30 λεπτά Walk-to-Run + 3x20 Wall Pumps")
+    manual_w_cals = st.number_input("Θερμίδες Προπόνησης (kcal - αν δεν χρησιμοποιείς AI)", value=300, step=50)
+
+    if st.button("🔥 Καταγραφή Προπόνησης"):
+        burned_cals = 0
+        # Αν υπάρχει API Key, αφήνουμε το Gemini να υπολογίσει
+        if st.session_state.api_key and w_desc:
+            try:
+                genai.configure(api_key=st.session_state.api_key)
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                prompt = f"""Analyze workout: Type "{k3_type}", Description "{w_desc}". Estimate burned calories (kcal). Return ONLY JSON: {{"calories_burned": int}}"""
+                res = model.generate_content(prompt)
+                clean_text = res.text.strip().replace("```json", "").replace("```", "")
+                data = json.loads(clean_text)
+                burned_cals = data.get("calories_burned", 0)
+            except Exception:
+                pass
+        
+        # Αν δεν υπολογίστηκε μέσω AI, χρησιμοποιούμε την τιμή εισαγωγής
+        if burned_cals == 0:
+            burned_cals = manual_w_cals
+
+        st.session_state.workout_burned += burned_cals
         save_to_cloud()
+        st.toast(f"🏃‍♂️ Καταγράφηκαν +{burned_cals} kcal προπόνησης στις {w_time.strftime('%H:%M')}!", icon="🔥")
         st.rerun()
 
 # ---------------------------------------------------------
