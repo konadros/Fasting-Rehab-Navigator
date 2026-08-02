@@ -76,13 +76,18 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# APPS SCRIPT WEB APP ENDPOINT SETUP
+# TIMEZONE & APPS SCRIPT SETUP
 # ---------------------------------------------------------
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwyQv4yEFHahfM6HYWZ0N3W6M3nsTfp2K6WEEFE0J7UvDfs0ZOmrslSk41HUftIZbQz/exec"
 
-date_today = datetime.date.today().strftime("%Y-%m-%d")
+# Υπολογισμός Ώρας Ελλάδος (UTC+3 για θερινούς μήνες)
+def get_greek_now():
+    return datetime.datetime.utcnow() + datetime.timedelta(hours=3)
 
-# Δημιουργία Session με αυτόματες ανακλήσεις (Retries)
+now_greek = get_greek_now()
+date_today = now_greek.strftime("%Y-%m-%d")
+current_time_str = now_greek.strftime("%H:%M")
+
 def get_http_session():
     session = requests.Session()
     retries = Retry(total=2, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
@@ -90,28 +95,27 @@ def get_http_session():
     return session
 
 # ---------------------------------------------------------
-# HELPER: FETCH FROM CLOUD WITH 15s TIMEOUT & SILENT FAIL
+# HELPER: FETCH FROM CLOUD
 # ---------------------------------------------------------
 def fetch_cloud_data():
     cals, prot, burned, skipped, last_time = 0, 0, 0, 0, None
     if WEB_APP_URL:
         try:
             session = get_http_session()
-            # Αύξηση timeout στα 15 δευτερόλεπτα
-            res = session.get(WEB_APP_URL, timeout=15, allow_redirects=True)
+            res = session.get(WEB_APP_URL, timeout=12, allow_redirects=True)
             if res.status_code == 200:
                 data = res.json()
                 for row in data[1:]:  # Skip header
                     if len(row) > 0 and row[0]:
-                        row_date_str = str(row[0])[:10]  # YYYY-MM-DD
+                        row_date_str = str(row[0])[:10]
                         if row_date_str == date_today:
                             cals = int(row[1]) if row[1] else 0
                             prot = int(row[2]) if row[2] else 0
                             burned = int(row[3]) if row[3] else 0
                             skipped = int(row[4]) if row[4] else 0
-                            last_time = str(row[5]) if len(row) > 5 and row[5] else None
+                            last_time = str(row[5]).strip() if len(row) > 5 and row[5] else None
         except Exception:
-            pass # Σιωπηλό προσπέρασμα χωρίς ενοχλητικά μηνύματα
+            pass
     return cals, prot, burned, skipped, last_time
 
 # Initial Load
@@ -130,7 +134,7 @@ base_cal_target = 2350
 base_protein_target = 150
 
 st.title("🥗 Fasting & Rehab GPS v3")
-st.caption(f"📅 Σήμερα: {date_today} | ☁️ Cloud Synced")
+st.caption(f"📅 Σήμερα: {date_today} | 🕒 Ώρα Ελλάδος: {current_time_str} | ☁️ Cloud Synced")
 
 # ---------------------------------------------------------
 # HELPER TO SAVE DATA TO GOOGLE SHEETS VIA WEB APP
@@ -147,7 +151,7 @@ def save_to_cloud():
                 "LastMealTime": str(st.session_state.last_meal_time or "")
             }
             session = get_http_session()
-            session.post(WEB_APP_URL, data=json.dumps(payload), headers={"Content-Type": "application/json"}, timeout=15, allow_redirects=True)
+            session.post(WEB_APP_URL, data=json.dumps(payload), headers={"Content-Type": "application/json"}, timeout=12, allow_redirects=True)
             st.toast("☁️ Επιτυχής συγχρονισμός στο Cloud!", icon="✅")
         except Exception as ex:
             st.error(f"❌ Σφάλμα αποθήκευσης: {ex}")
@@ -173,14 +177,13 @@ st.progress(min(1.0, st.session_state.protein_consumed / base_protein_target))
 # DYNAMIC RECOMMENDATION
 # ---------------------------------------------------------
 st.subheader("🎯 Προτεινόμενο Επόμενο Γεύμα")
-current_time_str = datetime.datetime.now().strftime("%H:%M")
 
 def get_smart_recommendation():
     if st.session_state.api_key:
         try:
             genai.configure(api_key=st.session_state.api_key)
             model = genai.GenerativeModel('gemini-1.5-flash')
-            prompt = f"User Status: Time {current_time_str}, Actual Last Meal Time {st.session_state.last_meal_time or 'None'}, Skipped {st.session_state.skipped_count}, Workout {st.session_state.workout_burned} kcal. Remaining: {rem_cal} kcal, {rem_protein}g protein. Give 2 short Greek sentences for next fasting meal."
+            prompt = f"User Status: Current Time {current_time_str}, Actual User-Entered Last Meal Time {st.session_state.last_meal_time or 'None'}, Skipped {st.session_state.skipped_count}, Workout Burned {st.session_state.workout_burned} kcal. Remaining: {rem_cal} kcal, {rem_protein}g protein. Give 2 short Greek sentences for next fasting meal."
             return model.generate_content(prompt).text.strip()
         except Exception:
             pass
@@ -199,12 +202,13 @@ def get_smart_recommendation():
 st.markdown(f"""<div class="next-meal-card">{get_smart_recommendation()}</div>""", unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# FLEXIBLE MEAL LOGGING
+# FLEXIBLE MEAL LOGGING WITH EXACT TIME SELECTION
 # ---------------------------------------------------------
 with st.expander("🍽️ Καταγραφή Γεύματος & Πραγματικής Ώρας", expanded=True):
     col_t1, col_t2 = st.columns([1, 2])
     with col_t1: 
-        meal_time = st.time_input("Πραγματική Ώρα Γεύματος", datetime.datetime.now().time())
+        # Προεπιλογή Ώρας Ελλάδος
+        meal_time = st.time_input("Πραγματική Ώρα Γεύματος", now_greek.time())
     with col_t2: 
         meal_desc = st.text_input("Τι έφαγες;", placeholder="π.χ. 1 πιάτο φακές, 10 ελιές, 2 φρυγανιές")
     
@@ -213,7 +217,10 @@ with st.expander("🍽️ Καταγραφή Γεύματος & Πραγματι
 
     if st.button("✨ Καταγραφή Γεύματος"):
         if meal_desc:
-            st.session_state.last_meal_time = meal_time.strftime("%H:%M")
+            # ΑΠΟΘΗΚΕΥΣΗ ΑΚΡΙΒΩΣ ΤΗΣ ΩΡΑΣ ΠΟΥ ΕΠΙΛΕΧΘΗΚΕ
+            selected_time_str = meal_time.strftime("%H:%M")
+            st.session_state.last_meal_time = selected_time_str
+            
             c_add, p_add = 0, 0
             if st.session_state.api_key:
                 try:
@@ -259,10 +266,11 @@ st.subheader("⚡ Γρήγορες Ενέργειες (Thumb Zone)")
 col_a1, col_a2 = st.columns(2)
 
 with col_a1:
-    quick_meal_time = st.time_input("Ώρα Γρήγορου Γεύματος", datetime.datetime.now().time(), key="quick_time")
+    quick_meal_time = st.time_input("Ώρα Γρήγορου Γεύματος", now_greek.time(), key="quick_time")
     if st.button("✅ Έφαγα το Προτεινόμενο"):
         st.session_state.cal_consumed += 450
         st.session_state.protein_consumed += 35
+        # Αποθήκευση της ώρας που επέλεξε ο χρήστης
         st.session_state.last_meal_time = quick_meal_time.strftime("%H:%M")
         save_to_cloud()
         st.rerun()
@@ -298,3 +306,4 @@ if st.button("🔄 Μηδενισμός Ημέρας"):
     st.session_state.last_meal_time = None
     save_to_cloud()
     st.rerun()
+                    
