@@ -52,6 +52,7 @@ now_greek = get_greek_now()
 date_today = now_greek.strftime("%Y-%m-%d")
 current_time_str = now_greek.strftime("%H:%M")
 
+# Header με ενεργοποιημένο το UPSERT (merge-duplicates) για αποφυγή του 409 Conflict
 headers = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -67,7 +68,7 @@ def fetch_cloud_data():
     if SUPABASE_URL and SUPABASE_KEY:
         try:
             endpoint = f"{SUPABASE_URL}/rest/v1/daily_logs?date=eq.{date_today}&select=*"
-            res = requests.get(endpoint, headers=headers, timeout=3)
+            res = requests.get(endpoint, headers=headers, timeout=5)
             if res.status_code == 200:
                 data = res.json()
                 if data and len(data) > 0:
@@ -77,8 +78,8 @@ def fetch_cloud_data():
                     burned = int(row.get("workout_burned", 0))
                     skipped = int(row.get("skipped_count", 0))
                     last_time = row.get("last_meal_time", None)
-        except Exception as e:
-            st.toast(f"⚠️ Σύνδεση Cloud: {e}", icon="⏳")
+        except Exception:
+            pass
     return cals, prot, burned, skipped, last_time
 
 def save_to_cloud():
@@ -93,11 +94,12 @@ def save_to_cloud():
                 "skipped_count": int(st.session_state.skipped_count),
                 "last_meal_time": str(st.session_state.last_meal_time or "")
             }
-            res = requests.post(endpoint, headers=headers, data=json.dumps(payload), timeout=3)
+            # Χρήση POST με merge-duplicates header για αυτόματο Update
+            res = requests.post(endpoint, headers=headers, data=json.dumps(payload), timeout=5)
             if res.status_code in [200, 201]:
                 st.toast("⚡ Ακαριαία Αποθήκευση στο Supabase!", icon="✅")
             else:
-                st.toast(f"❌ Σφάλμα: {res.status_code}", icon="⚠️")
+                st.error(f"❌ Σφάλμα Supabase HTTP {res.status_code}: {res.text}")
         except Exception as ex:
             st.error(f"❌ Σφάλμα αποθήκευσης: {ex}")
 
@@ -254,7 +256,7 @@ with col_a2:
         st.session_state.workout_burned = b_i
         st.session_state.skipped_count = s_i
         st.session_state.last_meal_time = t_i
-        st.toast("⚡ Ανανεώθηκε από το Supabase!", icon="☁️")
+        st.toast("⚡ Ανανεώθηκαν τα δεδομένα από το Supabase!", icon="☁️")
         st.rerun()
 
 st.divider()
