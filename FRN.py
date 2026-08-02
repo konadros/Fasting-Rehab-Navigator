@@ -80,7 +80,6 @@ st.markdown("""
 # ---------------------------------------------------------
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwyQv4yEFHahfM6HYWZ0N3W6M3nsTfp2K6WEEFE0J7UvDfs0ZOmrslSk41HUftIZbQz/exec"
 
-# Υπολογισμός Ώρας Ελλάδος (UTC+3 για θερινούς μήνες)
 def get_greek_now():
     return datetime.datetime.utcnow() + datetime.timedelta(hours=3)
 
@@ -105,7 +104,7 @@ def fetch_cloud_data():
             res = session.get(WEB_APP_URL, timeout=12, allow_redirects=True)
             if res.status_code == 200:
                 data = res.json()
-                for row in data[1:]:  # Skip header
+                for row in data[1:]:
                     if len(row) > 0 and row[0]:
                         row_date_str = str(row[0])[:10]
                         if row_date_str == date_today:
@@ -129,6 +128,12 @@ if 'loaded_from_cloud' not in st.session_state:
     st.session_state.loaded_from_cloud = True
 
 if 'api_key' not in st.session_state: st.session_state.api_key = ""
+
+# 🔒 ΑΡΧΙΚΟΠΟΙΗΣΗ ΩΡΑΣ ΣΤΟ SESSION STATE ΓΙΑ ΝΑ ΜΗΝ ΕΠΑΝΑΦΕΡΕΤΑΙ
+if 'meal_time_picker' not in st.session_state:
+    st.session_state.meal_time_picker = now_greek.time()
+if 'quick_time_picker' not in st.session_state:
+    st.session_state.quick_time_picker = now_greek.time()
 
 base_cal_target = 2350
 base_protein_target = 150
@@ -202,13 +207,13 @@ def get_smart_recommendation():
 st.markdown(f"""<div class="next-meal-card">{get_smart_recommendation()}</div>""", unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# FLEXIBLE MEAL LOGGING WITH EXACT TIME SELECTION
+# FLEXIBLE MEAL LOGGING (FIXED TIME INPUT)
 # ---------------------------------------------------------
 with st.expander("🍽️ Καταγραφή Γεύματος & Πραγματικής Ώρας", expanded=True):
     col_t1, col_t2 = st.columns([1, 2])
     with col_t1: 
-        # Προεπιλογή Ώρας Ελλάδος
-        meal_time = st.time_input("Πραγματική Ώρα Γεύματος", now_greek.time())
+        # Χρήση του session state key ώστε να μην επανέρχεται η ώρα
+        meal_time = st.time_input("Πραγματική Ώρα Γεύματος", key="meal_time_picker", step=300)
     with col_t2: 
         meal_desc = st.text_input("Τι έφαγες;", placeholder="π.χ. 1 πιάτο φακές, 10 ελιές, 2 φρυγανιές")
     
@@ -217,9 +222,8 @@ with st.expander("🍽️ Καταγραφή Γεύματος & Πραγματι
 
     if st.button("✨ Καταγραφή Γεύματος"):
         if meal_desc:
-            # ΑΠΟΘΗΚΕΥΣΗ ΑΚΡΙΒΩΣ ΤΗΣ ΩΡΑΣ ΠΟΥ ΕΠΙΛΕΧΘΗΚΕ
-            selected_time_str = meal_time.strftime("%H:%M")
-            st.session_state.last_meal_time = selected_time_str
+            # Αποθήκευση της ώρας που έχει επιλεγεί εκείνη τη στιγμή
+            st.session_state.last_meal_time = meal_time.strftime("%H:%M")
             
             c_add, p_add = 0, 0
             if st.session_state.api_key:
@@ -266,11 +270,10 @@ st.subheader("⚡ Γρήγορες Ενέργειες (Thumb Zone)")
 col_a1, col_a2 = st.columns(2)
 
 with col_a1:
-    quick_meal_time = st.time_input("Ώρα Γρήγορου Γεύματος", now_greek.time(), key="quick_time")
+    quick_meal_time = st.time_input("Ώρα Γρήγορου Γεύματος", key="quick_time_picker", step=300)
     if st.button("✅ Έφαγα το Προτεινόμενο"):
         st.session_state.cal_consumed += 450
         st.session_state.protein_consumed += 35
-        # Αποθήκευση της ώρας που επέλεξε ο χρήστης
         st.session_state.last_meal_time = quick_meal_time.strftime("%H:%M")
         save_to_cloud()
         st.rerun()
@@ -306,4 +309,3 @@ if st.button("🔄 Μηδενισμός Ημέρας"):
     st.session_state.last_meal_time = None
     save_to_cloud()
     st.rerun()
-                    
